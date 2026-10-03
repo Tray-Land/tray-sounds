@@ -124,15 +124,35 @@ public partial class App : Application
         _flyout?.HidePopup();
         if (_addSound is null)
         {
-            _addSound = new AddSoundWindow();
-            _addSound.Closed += (_, _) =>
-            {
-                _addSound = null;
-                ReleaseIdleResourcesIfNoWindows();
-            };
+            _addSound = CreateAddSoundWindow(null);
         }
 
         _addSound.Start(start);
+    }
+
+    /// <summary>Opens the add window on an existing user sound to rename it, change its emoji, or trim it.</summary>
+    public void ShowEditSound(Sound sound)
+    {
+        _flyout?.HidePopup();
+        if (_addSound is not null)
+        {
+            _addSound.Activate(); // one add/edit window at a time; don't throw away work in progress
+            return;
+        }
+
+        _addSound = CreateAddSoundWindow(sound);
+        _addSound.Start(AddSoundStart.None);
+    }
+
+    private AddSoundWindow CreateAddSoundWindow(Sound? editing)
+    {
+        AddSoundWindow window = new(editing);
+        window.Closed += (_, _) =>
+        {
+            _addSound = null;
+            ReleaseIdleResourcesIfNoWindows();
+        };
+        return window;
     }
 
     private void OnPlaybackChanged(object? sender, EventArgs e)

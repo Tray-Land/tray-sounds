@@ -10,6 +10,9 @@
   <ItemGroup>
     <!-- WinRT-free logic from the app, linked rather than referenced (the app is a WinUI exe). -->
     <Compile Include="..\Services\SoundNamePolicy.cs" Link="Linked\SoundNamePolicy.cs" />
+    <Compile Include="..\Services\SoundOrderPolicy.cs" Link="Linked\SoundOrderPolicy.cs" />
+    <Compile Include="..\Services\SoundCreditPolicy.cs" Link="Linked\SoundCreditPolicy.cs" />
+    <Compile Include="..\Services\SoundTrimPolicy.cs" Link="Linked\SoundTrimPolicy.cs" />
   </ItemGroup>
 
   <ItemGroup>

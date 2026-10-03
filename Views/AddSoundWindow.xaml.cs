@@ -3,6 +3,8 @@ using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
+using Rectangle = Microsoft.UI.Xaml.Shapes.Rectangle;
 using TraySounds.Services;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Media.Core;
@@ -42,24 +44,63 @@ public sealed partial class AddSoundWindow : WindowEx
     private bool _sourceIsRecording;
     private bool _isBusy;
     private bool _isClosed;
+    private bool _emojiChosen;
+    private string _emoji = SoundLibrary.FileEmoji;
 
-    public AddSoundWindow()
+    private const int WaveBuckets = 96;
+    private const double WaveformHeight = 48;
+
+    // Edit mode: the window opens on an existing user sound instead of an empty source.
+    private readonly Sound? _editing;
+    private Waveform? _waveform;
+    private CancellationTokenSource? _waveformLoad;
+    private bool _settingTrim;
+
+    public AddSoundWindow(Sound? editing = null)
     {
+        _editing = editing;
         InitializeComponent();
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
-        WindowPlacementService.CenterOnPrimary(this, 440, 420);
+        WindowPlacementService.CenterOnPrimary(this, 440, 600);
         IsMaximizable = false;
         IsMinimizable = false;
         IsResizable = false;
 
         RecordingLimit.Text = $"Recordings stop on their own after {SoundNamePolicy.FormatDuration(AudioRecorder.MaxLength)}.";
         _recordingTimer = DispatcherQueue.CreateTimer();
-        _recordingTimer.Interval = TimeSpan.FromMilliseconds(250);
+        _recordingTimer.Interval = TimeSpan.FromMilliseconds(50);
+        BuildWaveform();
         _recordingTimer.Tick += RecordingTimer_Tick;
 
+        EmojiText.Text = _emoji;
+        EmojiPickerPanel picker = new();
+        picker.EmojiPicked += (_, emoji) =>
+        {
+            _emojiChosen = true;
+            SetEmoji(emoji);
+            EmojiFlyout.Hide();
+        };
+        EmojiFlyout.Content = picker;
+
+        WaveformHost.SizeChanged += (_, _) => DrawWaveform();
         Closed += OnClosed;
+
+        if (editing is not null)
+        {
+            Title = "Edit sound";
+            AppTitleBar.Title = "Edit sound";
+            AddButton.Content = "Save";
+            StartOverButton.Visibility = Visibility.Collapsed;
+            _sourcePath = editing.FilePath; // the library's own copy: never deleted from here
+            _sourceIsRecording = false;
+            _emojiChosen = true;
+            NameBox.Text = editing.Name;
+            SetEmoji(editing.Emoji);
+            ShowReady("Trim the sound, or change its name and emoji.", editing.Emoji);
+            LoadWaveform(editing.FilePath, editing.Trim);
+        }
     }
 
     /// <summary>Brings the window up, optionally jumping straight into recording or the picker.</summary>
@@ -105,11 +146,22 @@ public sealed partial class AddSoundWindow : WindowEx
         EmptyPanel.Visibility = Visibility.Collapsed;
         RecordingPanel.Visibility = Visibility.Collapsed;
         ReadyPanel.Visibility = Visibility.Visible;
-        ReadyEmoji.Text = emoji;
+        if (!_emojiChosen)
+        {
+            SetEmoji(emoji);
+        }
+
         ReadyDescription.Text = description;
         NameBox.Focus(FocusState.Programmatic);
         NameBox.SelectAll();
         UpdateAddButton();
+    }
+
+    private void SetEmoji(string emoji)
+    {
+        _emoji = emoji;
+        EmojiText.Text = emoji;
+        ReadyEmoji.Text = emoji;
     }
 
     private void UpdateAddButton() =>
@@ -138,11 +190,12 @@ public sealed partial class AddSoundWindow : WindowEx
     {
         ErrorBar.IsOpen = false;
         StopPreview();
-        PlaybackService.StopAll(); // don't record the soundboard itself
+        PlaybackService.StopAll(); // don't record the soundboard itself (or its own preview)
         _isBusy = true;
         RecordButton.IsEnabled = false;
 
-        AudioRecorder recorder = new();
+        RecordingSource source = SourceBox.SelectedIndex == 1 ? RecordingSource.SystemAudio : RecordingSource.Microphone;
+        AudioRecorder recorder = new(source);
         try
         {
             await recorder.StartAsync();
@@ -151,7 +204,11 @@ public sealed partial class AddSoundWindow : WindowEx
         {
             _isBusy = false;
             RecordButton.IsEnabled = true;
-            if (ex is UnauthorizedAccessException || ex.HResult == MicrophoneDisabledHResult)
+            if (source == RecordingSource.SystemAudio)
+            {
+                ShowError("Can't record system audio", ex.Message);
+            }
+            else if (ex is UnauthorizedAccessException || ex.HResult == MicrophoneDisabledHResult)
             {
                 ShowError("Microphone access is off", "Allow apps to use the microphone in Windows Settings, then try again.", "ms-settings:privacy-microphone");
             }
@@ -180,14 +237,73 @@ public sealed partial class AddSoundWindow : WindowEx
         RecordButton.IsEnabled = true;
         _recordingClock.Restart();
         RecordingTime.Text = SoundNamePolicy.FormatDuration(TimeSpan.Zero);
+        ResetWaveform();
+        RecordingDevice.Text = recorder.DeviceName is { } device
+            ? $"{(source == RecordingSource.SystemAudio ? "Listening to" : "Listening on")} {device}"
+            : (source == RecordingSource.SystemAudio ? "Listening to system audio" : "Listening on the microphone");
         _recordingTimer.Start();
         ShowRecording();
+    }
+
+    private const int BarCount = 48;
+    private const double BarWidth = 3;
+    private const double WaveHeight = 40;
+    private readonly Rectangle[] _bars = new Rectangle[BarCount];
+
+    private void BuildWaveform()
+    {
+        double step = 240.0 / BarCount;
+        for (int i = 0; i < BarCount; i++)
+        {
+            Rectangle bar = new()
+            {
+                Width = BarWidth,
+                RadiusX = 1.5,
+                RadiusY = 1.5,
+                Fill = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"],
+            };
+            Canvas.SetLeft(bar, i * step + (step - BarWidth) / 2);
+            SetBarHeight(bar, 0);
+            WaveCanvas.Children.Add(bar);
+            _bars[i] = bar;
+        }
+    }
+
+    private static void SetBarHeight(Rectangle bar, double level)
+    {
+        // sqrt lifts quiet sound so a normal voice or soft playback still visibly moves the bars.
+        double height = Math.Max(3, Math.Sqrt(Math.Clamp(level, 0, 1)) * WaveHeight);
+        bar.Height = height;
+        Canvas.SetTop(bar, (WaveHeight - height) / 2);
+    }
+
+    private void ResetWaveform()
+    {
+        foreach (Rectangle bar in _bars)
+        {
+            SetBarHeight(bar, 0);
+        }
+    }
+
+    /// <summary>Scrolls the waveform one step left and appends the newest level on the right.</summary>
+    private void PushLevel(float level)
+    {
+        for (int i = 0; i < BarCount - 1; i++)
+        {
+            SetBarHeight(_bars[i], Math.Pow(_bars[i + 1].Height / WaveHeight, 2));
+        }
+
+        SetBarHeight(_bars[BarCount - 1], level);
     }
 
     private void RecordingTimer_Tick(DispatcherQueueTimer sender, object args)
     {
         TimeSpan elapsed = _recordingClock.Elapsed;
         RecordingTime.Text = SoundNamePolicy.FormatDuration(elapsed);
+        if (_recorder is { } live)
+        {
+            PushLevel(live.Level);
+        }
 
         // Blink the dot so it reads as "live".
         RecordingDot.Opacity = elapsed.Milliseconds < 500 ? 1 : 0.35;
@@ -231,6 +347,7 @@ public sealed partial class AddSoundWindow : WindowEx
         }
 
         ShowReady($"Recording · {SoundNamePolicy.FormatDuration(length)}", SoundLibrary.RecordingEmoji);
+        LoadWaveform(recorder.FilePath!, null);
     }
 
     // Files
@@ -291,6 +408,164 @@ public sealed partial class AddSoundWindow : WindowEx
         _sourceIsRecording = false;
         NameBox.Text = SoundLibrary.UniqueName(SoundNamePolicy.FromFileName(path));
         ShowReady(Path.GetFileName(path), SoundLibrary.FileEmoji);
+        LoadWaveform(path, null);
+    }
+
+    // Waveform and trim
+
+    private void LoadWaveform(string path, SoundTrim? trim)
+    {
+        CancelWaveformLoad();
+        CancellationTokenSource load = _waveformLoad = new();
+        ResetTrim();
+        WaveformLoading.IsActive = true;
+        _ = LoadAsync();
+
+        async Task LoadAsync()
+        {
+            Waveform? waveform = null;
+            try
+            {
+                waveform = await WaveformReader.ReadAsync(path, WaveBuckets, load.Token);
+            }
+            catch
+            {
+                // Cancelled, or a format Media Foundation can't decode; the sound just can't be trimmed.
+            }
+
+            if (load.IsCancellationRequested || _isClosed)
+            {
+                return;
+            }
+
+            WaveformLoading.IsActive = false;
+            if (waveform is null || waveform.Duration <= TimeSpan.Zero)
+            {
+                return;
+            }
+
+            _waveform = waveform;
+            SoundTrim shown = trim is { } saved
+                ? SoundTrimPolicy.Clamp(saved.Start, saved.End, waveform.Duration)
+                : new(TimeSpan.Zero, waveform.Duration);
+            _settingTrim = true;
+            TrimSelector.Minimum = 0;
+            TrimSelector.Maximum = waveform.Duration.TotalMilliseconds;
+            TrimSelector.RangeStart = shown.Start.TotalMilliseconds;
+            TrimSelector.RangeEnd = shown.End.TotalMilliseconds;
+            _settingTrim = false;
+            TrimSelector.IsEnabled = true;
+            DrawWaveform();
+            UpdateTrimLabels();
+        }
+    }
+
+    private void CancelWaveformLoad()
+    {
+        _waveformLoad?.Cancel();
+        _waveformLoad = null;
+    }
+
+    private void ResetTrim()
+    {
+        _waveform = null;
+        _settingTrim = true;
+        TrimSelector.IsEnabled = false;
+        TrimSelector.Minimum = 0;
+        TrimSelector.Maximum = 1000;
+        TrimSelector.RangeStart = 0;
+        TrimSelector.RangeEnd = 1000;
+        _settingTrim = false;
+        WaveformPath.Data = null;
+        WaveformSelectedPath.Data = null;
+        WaveformLoading.IsActive = false;
+        TrimStartText.Text = TrimEndText.Text = TrimLengthText.Text = string.Empty;
+    }
+
+    private SoundTrim SelectedRange() =>
+        new(TimeSpan.FromMilliseconds(TrimSelector.RangeStart), TimeSpan.FromMilliseconds(TrimSelector.RangeEnd));
+
+    /// <summary>The slice to store: null when it covers the whole clip. Keeps the saved trim if the clip couldn't be decoded.</summary>
+    private SoundTrim? CurrentTrim() =>
+        _waveform is { } waveform ? SoundTrimPolicy.ToStored(SelectedRange(), waveform.Duration) : _editing?.Trim;
+
+    private void TrimSelector_ValueChanged(object sender, CommunityToolkit.WinUI.Controls.RangeChangedEventArgs e)
+    {
+        if (_settingTrim || _waveform is not { } waveform)
+        {
+            return;
+        }
+
+        SoundTrim range = SelectedRange();
+        SoundTrim clamped = SoundTrimPolicy.Clamp(range.Start, range.End, waveform.Duration);
+        if (clamped != range)
+        {
+            _settingTrim = true;
+            TrimSelector.RangeStart = clamped.Start.TotalMilliseconds;
+            TrimSelector.RangeEnd = clamped.End.TotalMilliseconds;
+            _settingTrim = false;
+        }
+
+        UpdateTrimLabels();
+    }
+
+    private void UpdateTrimLabels()
+    {
+        if (_waveform is not { } waveform)
+        {
+            return;
+        }
+
+        SoundTrim range = SelectedRange();
+        TrimStartText.Text = SoundTrimPolicy.FormatTime(range.Start);
+        TrimEndText.Text = SoundTrimPolicy.FormatTime(range.End);
+        TrimLengthText.Text = $"{SoundTrimPolicy.FormatTime(range.Length)} selected";
+        double width = WaveformPath.ActualWidth;
+        double total = waveform.Duration.TotalMilliseconds;
+        WaveformSelectedPath.Clip = new RectangleGeometry
+        {
+            Rect = new Windows.Foundation.Rect(
+                range.Start.TotalMilliseconds / total * width,
+                0,
+                range.Length.TotalMilliseconds / total * width,
+                WaveformHeight),
+        };
+    }
+
+    /// <summary>One vertical line per peak, mirrored around the middle. The selected slice is the same shape clipped and drawn in the accent color.</summary>
+    private void DrawWaveform()
+    {
+        if (_waveform is not { } waveform)
+        {
+            return;
+        }
+
+        double width = WaveformHost.ActualWidth - WaveformPath.Margin.Left - WaveformPath.Margin.Right;
+        if (width <= 0)
+        {
+            return;
+        }
+
+        // A geometry can only belong to one element, so each path gets its own copy.
+        WaveformPath.Data = BuildWaveformGeometry(waveform.Peaks, width);
+        WaveformSelectedPath.Data = BuildWaveformGeometry(waveform.Peaks, width);
+        UpdateTrimLabels();
+    }
+
+    private static PathGeometry BuildWaveformGeometry(float[] peaks, double width)
+    {
+        PathGeometry geometry = new();
+        double step = width / peaks.Length;
+        for (int i = 0; i < peaks.Length; i++)
+        {
+            double half = Math.Max(1, Math.Sqrt(peaks[i]) * WaveformHeight / 2);
+            double x = (i + 0.5) * step;
+            PathFigure figure = new() { StartPoint = new Windows.Foundation.Point(x, WaveformHeight / 2 - half) };
+            figure.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(x, WaveformHeight / 2 + half) });
+            geometry.Figures.Add(figure);
+        }
+
+        return geometry;
     }
 
     private void SourceCard_DragOver(object sender, DragEventArgs e)
@@ -350,7 +625,7 @@ public sealed partial class AddSoundWindow : WindowEx
 
         try
         {
-            player.Source = MediaSource.CreateFromStorageFile(await StorageFile.GetFileFromPathAsync(_sourcePath));
+            player.Source = PlaybackService.CreateSource(await StorageFile.GetFileFromPathAsync(_sourcePath), CurrentTrim());
             player.Play();
         }
         catch (Exception ex)
@@ -386,7 +661,10 @@ public sealed partial class AddSoundWindow : WindowEx
     {
         StopPreview();
         ClearSource();
+        ResetTrim();
         NameBox.Text = string.Empty;
+        _emojiChosen = false;
+        SetEmoji(SoundLibrary.FileEmoji);
         ShowEmpty();
         RecordButton.Focus(FocusState.Programmatic);
     }
@@ -405,7 +683,15 @@ public sealed partial class AddSoundWindow : WindowEx
         UpdateAddButton();
         try
         {
-            await SoundLibrary.AddAsync(NameBox.Text, _sourcePath, _sourceIsRecording);
+            if (_editing is not null)
+            {
+                PlaybackService.Stop(_editing.Id); // so the next play uses the new slice
+                SoundLibrary.Update(_editing.Id, NameBox.Text, _emoji, CurrentTrim());
+            }
+            else
+            {
+                await SoundLibrary.AddAsync(NameBox.Text, _sourcePath, _sourceIsRecording, _emoji, CurrentTrim());
+            }
         }
         catch (Exception ex)
         {
@@ -415,7 +701,7 @@ public sealed partial class AddSoundWindow : WindowEx
             return;
         }
 
-        _sourcePath = null; // now owned by the library
+        _sourcePath = null; // now owned by the library (and in edit mode it always was)
         Close();
         App.Current.ShowFlyout();
     }
@@ -431,6 +717,7 @@ public sealed partial class AddSoundWindow : WindowEx
     /// <summary>Forgets the current source, deleting it if it was a temp recording.</summary>
     private void ClearSource()
     {
+        CancelWaveformLoad();
         if (_sourceIsRecording)
         {
             AudioRecorder.TryDelete(_sourcePath);

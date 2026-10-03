@@ -76,6 +76,43 @@ internal static class SoundNamePolicy
         return cleaned.Length <= MaxNameLength ? cleaned : cleaned[..MaxNameLength].TrimEnd();
     }
 
+    /// <summary>Suggestions for the emoji picker; anything else can still be typed or pasted.</summary>
+    public static readonly IReadOnlyList<string> EmojiChoices =
+    [
+        "🎵", "🎶", "🎙️", "🔔", "📯", "🥁", "🎺", "🎸", "🎹", "🎷", "🎻", "🎤",
+        "🎉", "👏", "🙌", "👍", "👎", "💯", "🔥", "⚡", "💥", "✨", "💨", "🌊",
+        "😂", "🤣", "😭", "😱", "😎", "🤔", "🙄", "😴", "🤯", "🥳", "😈", "👻",
+        "🐶", "🐱", "🐔", "🐸", "🦗", "🦆", "🐑", "🐮", "🦁", "🐺", "🦅", "🐝",
+        "🚗", "🚀", "🚨", "⏰", "📞", "🔫", "💣", "🔨", "🚪", "🛎️", "🪀", "🎯",
+        "✅", "❌", "⚠️", "❓", "❗", "💀", "👀", "❤️", "🍕", "🍺", "☕", "🏆",
+    ];
+
+    /// <summary>
+    /// The first emoji-like character (grapheme cluster) in <paramref name="input"/>, or
+    /// <paramref name="fallback"/> when there is none. Letters, digits, punctuation, and spaces don't count.
+    /// </summary>
+    public static string FirstEmoji(string? input, string fallback)
+    {
+        if (string.IsNullOrEmpty(input))
+        {
+            return fallback;
+        }
+
+        TextElementEnumerator elements = StringInfo.GetTextElementEnumerator(input);
+        while (elements.MoveNext())
+        {
+            string element = (string)elements.Current;
+            if (element.Length == 1 && (char.IsLetterOrDigit(element[0]) || char.IsWhiteSpace(element[0]) || char.IsControl(element[0]) || char.IsPunctuation(element[0])))
+            {
+                continue;
+            }
+
+            return element;
+        }
+
+        return fallback;
+    }
+
     /// <summary>"Ding" → "Ding 2" when "Ding" is taken (case-insensitive).</summary>
     public static string MakeUnique(string name, IEnumerable<string> existing)
     {

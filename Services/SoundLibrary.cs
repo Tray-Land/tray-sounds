@@ -5,10 +5,10 @@ using Windows.Storage;
 namespace TraySounds.Services;
 
 /// <summary>A playable sound: one of the stock sounds shipped in the package, or one the user added.</summary>
-public sealed record Sound(string Id, string Name, string Emoji, bool IsStock, string FilePath);
+public sealed record Sound(string Id, string Name, string Emoji, bool IsStock, string FilePath, SoundCredit? Credit = null, SoundTrim? Trim = null);
 
 /// <summary>How a user sound is stored in library.json. The audio itself lives in LocalFolder\Sounds.</summary>
-internal sealed record UserSoundRecord(string Id, string Name, string FileName, bool IsRecording);
+internal sealed record UserSoundRecord(string Id, string Name, string FileName, bool IsRecording, string? Emoji = null, long StartMs = 0, long EndMs = 0);
 
 [JsonSerializable(typeof(List<UserSoundRecord>))]
 [JsonSourceGenerationOptions(WriteIndented = true)]
@@ -25,20 +25,27 @@ internal static class SoundLibrary
 
     private static readonly string StockFolder = Path.Combine(AppContext.BaseDirectory, "Assets", "Sounds");
 
+    // Must stay above s_stock: static initializers run in textual order.
+    private static readonly IReadOnlyDictionary<string, SoundCredit> s_credits = LoadCredits();
+
+    // The id is kept from the old synthesized sounds where one was replaced, so saved tile order survives.
     private static readonly IReadOnlyList<Sound> s_stock =
     [
-        Stock("airhorn", "Air horn", "📯"),
-        Stock("rimshot", "Ba dum tss", "🥁"),
-        Stock("sad-trombone", "Sad trombone", "🎺"),
-        Stock("tada", "Ta-da", "🎉"),
-        Stock("applause", "Applause", "👏"),
-        Stock("crickets", "Crickets", "🦗"),
-        Stock("correct", "Correct", "✅"),
-        Stock("buzzer", "Wrong", "❌"),
-        Stock("ding", "Ding", "🔔"),
-        Stock("boing", "Boing", "🪀"),
-        Stock("laser", "Pew", "⚡"),
-        Stock("whoosh", "Whoosh", "💨"),
+        Stock("freesound_community-dj-airhorn-sound-39405.mp3", "Air horn", "📯", "airhorn"),
+        Stock("freesound_community-rimshot-joke-funny-80325.mp3", "Ba dum tss", "🥁", "rimshot"),
+        Stock("universfield-failure-trumpet-242645.mp3", "Sad trumpet", "🎺", "sad-trombone"),
+        Stock("376318__jimhancock__tada.mp3", "Ta-da", "🎉", "tada"),
+        Stock("423455__ohforheavensake__trumpet-brass-fanfare.mp3", "Fanfare", "🎖️"),
+        Stock("350433__bevibeldesign__horn-stabs-entrance.mp3", "Grand entrance", "🎷"),
+        Stock("324323__kwahmah_02__huge-applause.mp3", "Applause", "👏", "applause"),
+        Stock("124996__phmiller42__aww.mp3", "Aww", "🥺"),
+        Stock("656116__itsthegoodstuff__crickets.mp3", "Crickets", "🦗", "crickets"),
+        Stock("correct.wav", "Correct", "✅"),
+        Stock("buzzer.wav", "Wrong", "❌"),
+        Stock("ding.wav", "Ding", "🔔"),
+        Stock("188869__plingativator__jawharp_boing.mp3", "Boing", "🪀", "boing"),
+        Stock("laser.wav", "Pew", "⚡"),
+        Stock("425706__moogy73__woosh_medium_short_01.mp3", "Whoosh", "💨", "whoosh"),
     ];
 
     private static List<UserSoundRecord>? s_user;
@@ -64,7 +71,7 @@ internal static class SoundLibrary
     /// <summary>
     /// Copies (or, for a temporary recording, moves) <paramref name="sourcePath"/> into the library.
     /// </summary>
-    public static async Task<Sound> AddAsync(string name, string sourcePath, bool isRecording)
+    public static async Task<Sound> AddAsync(string name, string sourcePath, bool isRecording, string? emoji = null, SoundTrim? trim = null)
     {
         string id = Guid.NewGuid().ToString("N");
         string fileName = SoundNamePolicy.StorageFileName(id, sourcePath);
@@ -83,8 +90,8 @@ internal static class SoundLibrary
             }
         });
 
-        UserSoundRecord record = new(id, UniqueName(SoundNamePolicy.Clean(name) is { Length: > 0 } clean ? clean : "Sound"), fileName, isRecording);
-        LoadUser().Insert(0, record);
+        UserSoundRecord record = new(id, UniqueName(SoundNamePolicy.Clean(name) is { Length: > 0 } clean ? clean : "Sound"), fileName, isRecording, SoundNamePolicy.FirstEmoji(emoji, DefaultEmoji(isRecording)), TrimStartMs(trim), TrimEndMs(trim));
+        LoadUser().Add(record);
         Save();
         return ToSound(record);
     }
@@ -102,6 +109,46 @@ internal static class SoundLibrary
         user[index] = user[index] with { Name = UniqueName(clean, id) };
         Save();
     }
+
+    public static void SetEmoji(string id, string emoji)
+    {
+        List<UserSoundRecord> user = LoadUser();
+        int index = user.FindIndex(u => u.Id == id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        user[index] = user[index] with { Emoji = SoundNamePolicy.FirstEmoji(emoji, DefaultEmoji(user[index].IsRecording)) };
+        Save();
+    }
+
+    /// <summary>Saves the edit window's result for a user sound: name, emoji, and the trimmed slice.</summary>
+    public static void Update(string id, string name, string emoji, SoundTrim? trim)
+    {
+        List<UserSoundRecord> user = LoadUser();
+        int index = user.FindIndex(u => u.Id == id);
+        string clean = SoundNamePolicy.Clean(name);
+        if (index < 0 || clean.Length == 0)
+        {
+            return;
+        }
+
+        user[index] = user[index] with
+        {
+            Name = UniqueName(clean, id),
+            Emoji = SoundNamePolicy.FirstEmoji(emoji, DefaultEmoji(user[index].IsRecording)),
+            StartMs = TrimStartMs(trim),
+            EndMs = TrimEndMs(trim),
+        };
+        Save();
+    }
+
+    private static long TrimStartMs(SoundTrim? trim) => trim is { } t ? (long)t.Start.TotalMilliseconds : 0;
+
+    private static long TrimEndMs(SoundTrim? trim) => trim is { } t ? (long)t.End.TotalMilliseconds : 0;
+
+    public static string DefaultEmoji(bool isRecording) => isRecording ? RecordingEmoji : FileEmoji;
 
     public static void Remove(string id)
     {
@@ -124,11 +171,27 @@ internal static class SoundLibrary
         }
     }
 
-    private static Sound Stock(string file, string name, string emoji) =>
-        new("stock:" + file, name, emoji, true, Path.Combine(StockFolder, file + ".wav"));
+    private static Sound Stock(string file, string name, string emoji, string? id = null)
+    {
+        string stem = Path.GetFileNameWithoutExtension(file);
+        return new("stock:" + (id ?? stem), name, emoji, true, Path.Combine(StockFolder, file), SoundCreditPolicy.Find(s_credits, stem));
+    }
+
+    private static IReadOnlyDictionary<string, SoundCredit> LoadCredits()
+    {
+        try
+        {
+            return SoundCreditPolicy.Parse(File.ReadAllText(Path.Combine(StockFolder, "sound attribution.csv")));
+        }
+        catch
+        {
+            // Credits are a courtesy; the sounds still play without them.
+            return new Dictionary<string, SoundCredit>();
+        }
+    }
 
     private static Sound ToSound(UserSoundRecord r) =>
-        new(r.Id, r.Name, r.IsRecording ? RecordingEmoji : FileEmoji, false, Path.Combine(SoundsFolder, r.FileName));
+        new(r.Id, r.Name, r.Emoji is { Length: > 0 } emoji ? emoji : DefaultEmoji(r.IsRecording), false, Path.Combine(SoundsFolder, r.FileName), null, SoundTrimPolicy.FromStored(r.StartMs, r.EndMs));
 
     private static List<UserSoundRecord> LoadUser()
     {

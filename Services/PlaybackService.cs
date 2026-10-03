@@ -82,7 +82,7 @@ internal static class PlaybackService
                 return;
             }
 
-            player.Source = MediaSource.CreateFromStorageFile(file);
+            player.Source = CreateSource(file, sound.Trim);
             player.Play();
         }
         catch
@@ -90,6 +90,13 @@ internal static class PlaybackService
             Finish(sound.Id, player);
             Failed?.Invoke(null, sound);
         }
+    }
+
+    /// <summary>The file as a playable source, limited to the trimmed slice when there is one.</summary>
+    public static IMediaPlaybackSource CreateSource(StorageFile file, SoundTrim? trim)
+    {
+        MediaSource source = MediaSource.CreateFromStorageFile(file);
+        return trim is { } t ? new MediaPlaybackItem(source, t.Start, t.Length) : source;
     }
 
     public static void Stop(string id)

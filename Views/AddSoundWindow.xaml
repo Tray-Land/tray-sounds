@@ -3,6 +3,7 @@
     x:Class="TraySounds.Views.AddSoundWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:CommunityToolkit.WinUI.Controls"
     xmlns:ex="using:WinUIEx"
     Title="Add a sound">
 
@@ -50,6 +51,14 @@
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center"
                     Spacing="12">
+                    <ComboBox
+                        x:Name="SourceBox"
+                        HorizontalAlignment="Center"
+                        AutomationProperties.Name="Record from"
+                        SelectedIndex="0">
+                        <ComboBoxItem Content="Microphone" />
+                        <ComboBoxItem Content="System audio" />
+                    </ComboBox>
                     <StackPanel
                         HorizontalAlignment="Center"
                         Orientation="Horizontal"
@@ -104,6 +113,19 @@
                             Style="{StaticResource SubtitleTextBlockStyle}"
                             Text="0:00" />
                     </StackPanel>
+                    <Canvas
+                        x:Name="WaveCanvas"
+                        Width="240"
+                        Height="40"
+                        HorizontalAlignment="Center"
+                        AutomationProperties.AccessibilityView="Raw" />
+                    <TextBlock
+                        x:Name="RecordingDevice"
+                        HorizontalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        MaxWidth="320"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextTrimming="CharacterEllipsis" />
                     <Button
                         x:Name="StopRecordingButton"
                         AutomationProperties.Name="Stop recording"
@@ -121,11 +143,12 @@
                         Style="{StaticResource CaptionTextBlockStyle}" />
                 </StackPanel>
 
-                <Grid
+                <StackPanel
                     x:Name="ReadyPanel"
                     VerticalAlignment="Center"
-                    ColumnSpacing="12"
+                    Spacing="12"
                     Visibility="Collapsed">
+                <Grid ColumnSpacing="12">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
@@ -157,18 +180,100 @@
                                     <TextBlock x:Name="PreviewText" Text="Preview" />
                                 </StackPanel>
                             </Button>
-                            <Button Click="StartOver_Click" Content="Start over" />
+                            <Button
+                                x:Name="StartOverButton"
+                                Click="StartOver_Click"
+                                Content="Start over" />
                         </StackPanel>
                     </StackPanel>
                 </Grid>
+
+                <!--  Trim: the waveform with the range selector laid over it.  -->
+                <StackPanel Spacing="4">
+                    <Grid x:Name="WaveformHost" Height="64">
+                        <Path
+                            x:Name="WaveformPath"
+                            Height="48"
+                            Margin="12,0"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Stroke="{ThemeResource TextFillColorTertiaryBrush}"
+                            StrokeThickness="1.5" />
+                        <Path
+                            x:Name="WaveformSelectedPath"
+                            Height="48"
+                            Margin="12,0"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Stroke="{ThemeResource AccentFillColorDefaultBrush}"
+                            StrokeThickness="1.5" />
+                        <ProgressRing
+                            x:Name="WaveformLoading"
+                            Width="24"
+                            Height="24"
+                            IsActive="False" />
+                        <controls:RangeSelector
+                            x:Name="TrimSelector"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Trim"
+                            IsEnabled="False"
+                            Maximum="1000"
+                            Minimum="0"
+                            RangeEnd="1000"
+                            RangeStart="0"
+                            StepFrequency="10"
+                            ValueChanged="TrimSelector_ValueChanged" />
+                    </Grid>
+                    <Grid>
+                        <TextBlock
+                            x:Name="TrimStartText"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}" />
+                        <TextBlock
+                            x:Name="TrimLengthText"
+                            HorizontalAlignment="Center"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}" />
+                        <TextBlock
+                            x:Name="TrimEndText"
+                            HorizontalAlignment="Right"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}" />
+                    </Grid>
+                </StackPanel>
+                </StackPanel>
             </Grid>
 
-            <TextBox
-                x:Name="NameBox"
-                Header="Name"
-                MaxLength="32"
-                PlaceholderText="What should the button say?"
-                TextChanged="NameBox_TextChanged" />
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Emoji" />
+                    <Button
+                        x:Name="EmojiButton"
+                        Width="56"
+                        Height="32"
+                        Padding="0"
+                        AutomationProperties.Name="Choose an emoji"
+                        ToolTipService.ToolTip="Choose an emoji">
+                        <TextBlock
+                            x:Name="EmojiText"
+                            FontFamily="Segoe UI Emoji"
+                            FontSize="18" />
+                        <Button.Flyout>
+                            <Flyout x:Name="EmojiFlyout" Placement="BottomEdgeAlignedLeft" />
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+                <TextBox
+                    x:Name="NameBox"
+                    Grid.Column="1"
+                    VerticalAlignment="Bottom"
+                    Header="Name"
+                    MaxLength="32"
+                    PlaceholderText="What should the button say?"
+                    TextChanged="NameBox_TextChanged" />
+            </Grid>
 
             <InfoBar
                 x:Name="ErrorBar"
