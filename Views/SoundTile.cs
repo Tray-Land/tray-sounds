@@ -7,6 +7,7 @@ namespace TraySounds.Views;
 public sealed partial class SoundTile(Sound sound) : INotifyPropertyChanged
 {
     private bool _isPlaying;
+    private string _hotkey = "";
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -16,7 +17,25 @@ public sealed partial class SoundTile(Sound sound) : INotifyPropertyChanged
 
     public string Emoji => Sound.Emoji;
 
+    public string ToolTip => Sound.Credit is { } credit ? $"{Name}\n{credit.Summary}" : Name;
+
     public string AccessibleName => IsPlaying ? $"Stop {Name}" : $"Play {Name}";
+
+    /// <summary>The key that triggers this tile ("1"–"9", "0" for the tenth), or empty past that.</summary>
+    public string Hotkey
+    {
+        get => _hotkey;
+        set
+        {
+            if (_hotkey == value)
+            {
+                return;
+            }
+
+            _hotkey = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Hotkey)));
+        }
+    }
 
     public bool IsPlaying
     {

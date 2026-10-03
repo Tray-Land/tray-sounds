@@ -9,14 +9,13 @@ using TraySounds.Services;
 namespace TraySounds.Views;
 
 /// <summary>
-/// The soundboard: the user's sounds above the stock ones. Playback lives in
+/// The soundboard: stock and user sounds together in one grid. Playback lives in
 /// <see cref="PlaybackService"/>, so sounds keep playing after the flyout hides; this page only
 /// listens for changes while it's on screen.
 /// </summary>
 public sealed partial class FlyoutPage : Page, IDisposable
 {
-    private readonly ObservableCollection<SoundTile> _userTiles = [];
-    private readonly List<SoundTile> _stockTiles;
+    private readonly ObservableCollection<SoundTile> _tiles = [];
     private bool _isShown;
     private bool _loadingVolume;
 
@@ -24,9 +23,73 @@ public sealed partial class FlyoutPage : Page, IDisposable
     {
         InitializeComponent();
         TitleText.Text = App.DisplayName;
-        _stockTiles = SoundLibrary.Stock().Select(s => new SoundTile(s)).ToList();
-        StockRepeater.ItemsSource = _stockTiles;
-        UserRepeater.ItemsSource = _userTiles;
+        TileGrid.ItemsSource = _tiles;
+
+        // 1–9 play the first nine tiles in board order, 0 the tenth; the number pad works too.
+        for (int i = 0; i < 10; i++)
+        {
+            int index = i;
+            int digit = (i + 1) % 10;
+            foreach (Windows.System.VirtualKey key in new[]
+            {
+                Windows.System.VirtualKey.Number0 + digit,
+                Windows.System.VirtualKey.NumberPad0 + digit,
+            })
+            {
+                KeyboardAccelerator accelerator = new() { Key = key };
+                accelerator.Invoked += (_, e) =>
+                {
+                    e.Handled = true;
+                    PlayTileAt(index);
+                };
+                KeyboardAccelerators.Add(accelerator);
+            }
+        }
+    }
+
+    private void PlayTileAt(int index)
+    {
+        if (index < _tiles.Count)
+        {
+            StatusBar.IsOpen = false;
+            _ = PlaybackService.ToggleAsync(_tiles[index].Sound);
+        }
+    }
+
+    private void NumberTiles()
+    {
+        for (int i = 0; i < _tiles.Count; i++)
+        {
+            _tiles[i].Hotkey = i < 10 ? ((i + 1) % 10).ToString() : "";
+        }
+    }
+
+    /// <summary>Sizes tiles so exactly <see cref="SettingsService.GridColumns"/> fit across the board.</summary>
+    private void UpdateTileSize()
+    {
+        if (TileGrid.ItemsPanelRoot is not ItemsWrapGrid panel)
+        {
+            return;
+        }
+
+        double available = TileGrid.ActualWidth - TileGrid.Padding.Left - TileGrid.Padding.Right;
+        if (available <= 0)
+        {
+            return;
+        }
+
+        // Floor so rounding never pushes the last column onto a new row.
+        double width = Math.Floor(available / SettingsService.GridColumns);
+        panel.ItemWidth = width;
+        panel.ItemHeight = Math.Round(width * 0.8);
+    }
+
+    private void TileGrid_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateTileSize();
+
+    private void TileGrid_DragItemsCompleted(ListViewBase sender, DragItemsCompletedEventArgs args)
+    {
+        SettingsService.SoundOrder = _tiles.Select(t => t.Sound.Id).ToList();
+        NumberTiles();
     }
 
     /// <summary>The flyout opened: pick up anything that changed while it was hidden.</summary>
@@ -40,9 +103,13 @@ public sealed partial class FlyoutPage : Page, IDisposable
             SoundLibrary.Changed += OnLibraryChanged;
         }
 
-        ReloadUserSounds();
+        ReloadSounds();
         SyncPlaying();
-        BoardScroller.ChangeView(null, 0, null, disableAnimation: true);
+        UpdateTileSize();
+        if (_tiles.Count > 0)
+        {
+            TileGrid.ScrollIntoView(_tiles[0]);
+        }
 
         _loadingVolume = true;
         VolumeSlider.Value = Math.Round(SettingsService.Volume * 100);
@@ -67,23 +134,25 @@ public sealed partial class FlyoutPage : Page, IDisposable
 
     public void Dispose() => OnHidden();
 
-    private void ReloadUserSounds()
+    private void ReloadSounds()
     {
-        IReadOnlyList<Sound> sounds = SoundLibrary.UserSounds();
-        _userTiles.Clear();
-        foreach (Sound sound in sounds)
+        _tiles.Clear();
+        IEnumerable<Sound> ordered = SoundOrderPolicy.Apply(
+            SoundLibrary.Stock().Concat(SoundLibrary.UserSounds()),
+            SettingsService.SoundOrder,
+            s => s.Id);
+        foreach (Sound sound in ordered)
         {
-            _userTiles.Add(new SoundTile(sound));
+            _tiles.Add(new SoundTile(sound));
         }
 
-        EmptyCard.Visibility = sounds.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        UserRepeater.Visibility = sounds.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        NumberTiles();
         SyncPlaying();
     }
 
     private void SyncPlaying()
     {
-        foreach (SoundTile tile in _userTiles.Concat(_stockTiles))
+        foreach (SoundTile tile in _tiles)
         {
             tile.IsPlaying = PlaybackService.IsPlaying(tile.Sound.Id);
         }
@@ -93,7 +162,7 @@ public sealed partial class FlyoutPage : Page, IDisposable
 
     private void OnPlaybackChanged(object? sender, EventArgs e) => SyncPlaying();
 
-    private void OnLibraryChanged(object? sender, EventArgs e) => ReloadUserSounds();
+    private void OnLibraryChanged(object? sender, EventArgs e) => ReloadSounds();
 
     private void OnPlaybackFailed(object? sender, Sound sound)
     {
@@ -104,9 +173,9 @@ public sealed partial class FlyoutPage : Page, IDisposable
         StatusBar.IsOpen = true;
     }
 
-    private void Tile_Click(object sender, RoutedEventArgs e)
+    private void TileGrid_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (sender is FrameworkElement { Tag: SoundTile tile })
+        if (e.ClickedItem is SoundTile tile)
         {
             StatusBar.IsOpen = false;
             _ = PlaybackService.ToggleAsync(tile.Sound);
@@ -130,16 +199,34 @@ public sealed partial class FlyoutPage : Page, IDisposable
         play.Click += (_, _) => _ = PlaybackService.ToggleAsync(tile.Sound);
         menu.Items.Add(play);
 
+        if (tile.Sound.Credit is { } credit)
+        {
+            MenuFlyoutItem author = new() { Text = $"Visit {credit.Author}'s page", Icon = new FontIcon { Glyph = "" } };
+            author.Click += (_, _) => _ = Windows.System.Launcher.LaunchUriAsync(credit.AuthorUrl);
+            MenuFlyoutItem source = new() { Text = $"View on {credit.SourceName}", Icon = new FontIcon { Glyph = "" } };
+            source.Click += (_, _) => _ = Windows.System.Launcher.LaunchUriAsync(credit.SourceUrl);
+            menu.Items.Add(new MenuFlyoutSeparator());
+            menu.Items.Add(author);
+            menu.Items.Add(source);
+        }
+
         if (!tile.Sound.IsStock)
         {
+            MenuFlyoutItem edit = new() { Text = "Edit…", Icon = new FontIcon { Glyph = "" } };
+            edit.Click += (_, _) => App.Current.ShowEditSound(tile.Sound);
+            menu.Items.Add(edit);
+
             MenuFlyoutItem rename = new() { Text = "Rename", Icon = new FontIcon { Glyph = "" } };
             rename.Click += (_, _) => ShowRename(element, tile.Sound);
+            MenuFlyoutItem emoji = new() { Text = "Change emoji", Icon = new FontIcon { Glyph = "" } };
+            emoji.Click += (_, _) => ShowEmojiPicker(element, tile.Sound);
             MenuFlyoutItem reveal = new() { Text = "Show in File Explorer", Icon = new FontIcon { Glyph = "" } };
             reveal.Click += (_, _) => RevealInExplorer(tile.Sound.FilePath);
             MenuFlyoutItem delete = new() { Text = "Delete", Icon = new FontIcon { Glyph = "" } };
             delete.Click += (_, _) => ConfirmDelete(element, tile.Sound);
 
             menu.Items.Add(rename);
+            menu.Items.Add(emoji);
             menu.Items.Add(reveal);
             menu.Items.Add(new MenuFlyoutSeparator());
             menu.Items.Add(delete);
@@ -193,6 +280,18 @@ public sealed partial class FlyoutPage : Page, IDisposable
         flyout.ShowAt(anchor);
     }
 
+    private static void ShowEmojiPicker(FrameworkElement anchor, Sound sound)
+    {
+        EmojiPickerPanel picker = new();
+        Flyout flyout = new() { Content = picker };
+        picker.EmojiPicked += (_, emoji) =>
+        {
+            SoundLibrary.SetEmoji(sound.Id, emoji);
+            flyout.Hide();
+        };
+        flyout.ShowAt(anchor);
+    }
+
     private static void ConfirmDelete(FrameworkElement anchor, Sound sound)
     {
         Button delete = new() { Content = "Delete", Style = (Style)Application.Current.Resources["AccentButtonStyle"], HorizontalAlignment = HorizontalAlignment.Right };
@@ -240,9 +339,7 @@ public sealed partial class FlyoutPage : Page, IDisposable
 
     private void StopButton_Click(object sender, RoutedEventArgs e) => PlaybackService.StopAll();
 
-    private void Record_Click(object sender, RoutedEventArgs e) => App.Current.ShowAddSound(AddSoundStart.Record);
-
-    private void ChooseFile_Click(object sender, RoutedEventArgs e) => App.Current.ShowAddSound(AddSoundStart.ChooseFile);
+    private void AddSound_Click(object sender, RoutedEventArgs e) => App.Current.ShowAddSound();
 
     private void SettingsButton_Click(object sender, RoutedEventArgs e) => App.Current.ShowSettings();
 }

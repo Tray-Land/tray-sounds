@@ -24,6 +24,8 @@ public sealed partial class SettingsPage : Page
     {
         _loading = true;
         OneAtATimeToggle.IsOn = SettingsService.OneSoundAtATime;
+        GridSizeSlider.Value = SettingsService.GridColumns;
+        ShowGridSize();
         _loading = false;
         _ = LoadStartupStateAsync();
         BackButton.Focus(FocusState.Programmatic);
@@ -79,6 +81,18 @@ public sealed partial class SettingsPage : Page
             SettingsService.OneSoundAtATime = OneAtATimeToggle.IsOn;
         }
     }
+
+    private void GridSizeSlider_ValueChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (!_loading)
+        {
+            SettingsService.GridColumns = (int)GridSizeSlider.Value;
+            ShowGridSize();
+        }
+    }
+
+    private void ShowGridSize() =>
+        GridSizeDescription.Text = $"{(int)GridSizeSlider.Value} sounds per row. Drag tiles on the board to rearrange them.";
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {

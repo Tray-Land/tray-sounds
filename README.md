@@ -4,14 +4,14 @@
 
 A soundboard in the Windows notification area. Click the tray icon, click a tile, hear the sound.
 
-Tray Sounds is a WinUI 3 app with no main window. The tray icon opens a small, always-on-top flyout next to the icon with a grid of sound tiles: twelve stock sounds, plus any you record or add yourself. Sounds keep playing after the flyout closes.
+Tray Sounds is a WinUI 3 app with no main window. The tray icon opens a small, always-on-top flyout next to the icon with a grid of sound tiles: fifteen stock sounds, plus any you record or add yourself. Sounds keep playing after the flyout closes.
 
 ## Features
 
-- **Stock sounds:** air horn, ba dum tss, sad trombone, ta-da, applause, crickets, correct, wrong, ding, boing, pew, and whoosh. They're synthesized from code by `scripts/GenerateStockSounds.cs`, so there are no third-party samples or licenses.
+- **Stock sounds:** air horn, ba dum tss, sad trumpet, ta-da, fanfare, grand entrance, applause, aww, crickets, boing, whoosh, plus a few synthesized by `scripts/GenerateStockSounds.cs` (correct, wrong, ding, pew). The downloaded ones are royalty-free and credited in `Assets/Sounds/sound attribution.csv`; hover a tile to see who made it, and right-click it to visit the creator's page or the sound's page.
 - **Record your own:** record from the default microphone (up to one minute), preview it, give it a name, and add it to the board.
 - **Use your own files:** pick or drag in a `.wav`, `.mp3`, `.m4a`, `.aac`, `.wma`, `.flac`, `.ogg`, or `.opus` file (up to 50 MB). The app keeps its own copy, so the sound still works after you move or delete the original.
-- **Tiles:** click to play, and click again to stop. A playing tile shows a progress bar. Right-click one of your own sounds to rename it, show it in File Explorer, or delete it.
+- **Tiles:** click to play, and click again to stop. A playing tile shows a progress bar. Right-click a sound for its credit links; on your own sounds you can also **Edit** it (the same window used to add a sound: rename it, pick an emoji, and drag the range selector over the waveform to trim where playback starts and stops; the original file is never changed), show it in File Explorer, or delete it.
 - **Volume and stop:** a volume slider and a Stop button sit at the bottom of the flyout. Volume changes apply to sounds that are already playing.
 - **Tray menu:** right-click the icon for Open, a **Play** submenu with every sound (no flyout needed), Stop all sounds (while something plays), Add a sound, Settings, and Exit.
 - **Tooltip:** hovering the icon shows what's playing.
@@ -67,7 +67,7 @@ To build signed x64 and ARM64 MSIX packages and a draft GitHub release, run `bui
 | `Services/SoundLibrary` | Stock sound list, plus the user's sounds in LocalState |
 | `Services/AudioRecorder` | Microphone capture to `.m4a` via `MediaCapture` |
 | `Services/SoundNamePolicy` | Pure naming and file rules, covered by `TraySounds.Tests` |
-| `scripts/GenerateStockSounds.cs` | C# file-based app that synthesizes `Assets/Sounds/*.wav` |
+| `scripts/GenerateStockSounds.cs` | C# file-based app that synthesizes the generated stock `Assets/Sounds/*.wav` |
 
 ## License
 

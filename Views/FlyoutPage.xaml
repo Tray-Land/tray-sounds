@@ -7,32 +7,40 @@
     Background="Transparent">
 
     <Page.Resources>
-        <UniformGridLayout
-            x:Key="TileLayout"
-            ItemsStretch="Fill"
-            MinColumnSpacing="6"
-            MinItemHeight="84"
-            MinItemWidth="104"
-            MinRowSpacing="6" />
+        <Style x:Key="TileContainerStyle" TargetType="GridViewItem">
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="MinWidth" Value="0" />
+            <Setter Property="MinHeight" Value="0" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Stretch" />
+        </Style>
 
         <DataTemplate x:Key="TileTemplate" x:DataType="views:SoundTile">
-            <Button
+            <Border
+                Margin="3"
                 Padding="4,8,4,0"
-                HorizontalAlignment="Stretch"
-                VerticalAlignment="Stretch"
-                HorizontalContentAlignment="Stretch"
-                VerticalContentAlignment="Stretch"
-                AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}"
-                Click="Tile_Click"
+                Background="{ThemeResource ControlFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}"
+                BorderThickness="1"
                 ContextRequested="Tile_ContextRequested"
+                CornerRadius="4"
+                AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}"
                 Tag="{x:Bind}"
-                ToolTipService.ToolTip="{x:Bind Name, Mode=OneWay}">
+                ToolTipService.ToolTip="{x:Bind ToolTip}">
                 <Grid RowSpacing="2">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="6" />
                     </Grid.RowDefinitions>
+                    <TextBlock
+                        Margin="2,-4,0,0"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="{x:Bind Hotkey, Mode=OneWay}" />
                     <TextBlock
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
@@ -53,7 +61,7 @@
                         IsIndeterminate="True"
                         Visibility="{x:Bind IsPlaying, Mode=OneWay}" />
                 </Grid>
-            </Button>
+            </Border>
         </DataTemplate>
     </Page.Resources>
 
@@ -70,7 +78,6 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <TextBlock
                 x:Name="TitleText"
@@ -78,29 +85,7 @@
                 Style="{StaticResource SubtitleTextBlockStyle}"
                 Text="Tray Sounds" />
             <Button
-                x:Name="AddButton"
                 Grid.Column="1"
-                AutomationProperties.Name="Add a sound"
-                Style="{StaticResource FlyoutIconButtonStyle}"
-                ToolTipService.ToolTip="Add a sound">
-                <FontIcon FontSize="14" Glyph="&#xE710;" />
-                <Button.Flyout>
-                    <MenuFlyout Placement="BottomEdgeAlignedRight">
-                        <MenuFlyoutItem Click="Record_Click" Text="Record from microphone">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE720;" />
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                        <MenuFlyoutItem Click="ChooseFile_Click" Text="Choose a sound file">
-                            <MenuFlyoutItem.Icon>
-                                <FontIcon Glyph="&#xE8E5;" />
-                            </MenuFlyoutItem.Icon>
-                        </MenuFlyoutItem>
-                    </MenuFlyout>
-                </Button.Flyout>
-            </Button>
-            <Button
-                Grid.Column="2"
                 AutomationProperties.Name="Settings"
                 Click="SettingsButton_Click"
                 Style="{StaticResource FlyoutIconButtonStyle}"
@@ -115,58 +100,41 @@
             IsOpen="False"
             Severity="Warning" />
 
-        <ScrollViewer
-            x:Name="BoardScroller"
+        <!--  Drag a tile to rearrange; the GridView is the scroller so dragging can auto-scroll  -->
+        <GridView
+            x:Name="TileGrid"
             Grid.Row="2"
-            Margin="0,0,-8,0">
-            <StackPanel Margin="0,0,8,4" Spacing="8">
-                <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Your sounds" />
-
-                <!--  Empty state: one clear next step  -->
-                <Border
-                    x:Name="EmptyCard"
-                    Padding="16,12"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1"
-                    CornerRadius="8">
-                    <StackPanel Spacing="10">
-                        <TextBlock
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="Record a clip or add an audio file to put it on your board."
-                            TextWrapping="Wrap" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button AutomationProperties.Name="Record a sound" Click="Record_Click">
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <FontIcon FontSize="14" Glyph="&#xE720;" />
-                                    <TextBlock Text="Record" />
-                                </StackPanel>
-                            </Button>
-                            <Button AutomationProperties.Name="Choose a sound file" Click="ChooseFile_Click">
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <FontIcon FontSize="14" Glyph="&#xE8E5;" />
-                                    <TextBlock Text="Choose file" />
-                                </StackPanel>
-                            </Button>
-                        </StackPanel>
+            Margin="0,0,-8,0"
+            Padding="0,0,8,4"
+            AllowDrop="True"
+            AutomationProperties.Name="Sounds"
+            CanDragItems="True"
+            CanReorderItems="True"
+            DragItemsCompleted="TileGrid_DragItemsCompleted"
+            IsItemClickEnabled="True"
+            ItemClick="TileGrid_ItemClick"
+            ItemContainerStyle="{StaticResource TileContainerStyle}"
+            ItemTemplate="{StaticResource TileTemplate}"
+            SelectionMode="None"
+            SizeChanged="TileGrid_SizeChanged">
+            <GridView.ItemsPanel>
+                <ItemsPanelTemplate>
+                    <ItemsWrapGrid Orientation="Horizontal" />
+                </ItemsPanelTemplate>
+            </GridView.ItemsPanel>
+            <GridView.Footer>
+                <!--  Add a sound: below the grid so the board stays the focus  -->
+                <Button
+                    Margin="3,8,0,0"
+                    AutomationProperties.Name="Add a sound"
+                    Click="AddSound_Click">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon FontSize="14" Glyph="&#xE710;" />
+                        <TextBlock Text="Add a sound" />
                     </StackPanel>
-                </Border>
-
-                <ItemsRepeater
-                    x:Name="UserRepeater"
-                    ItemTemplate="{StaticResource TileTemplate}"
-                    Layout="{StaticResource TileLayout}" />
-
-                <TextBlock
-                    Margin="0,8,0,0"
-                    Style="{StaticResource BodyStrongTextBlockStyle}"
-                    Text="Stock sounds" />
-                <ItemsRepeater
-                    x:Name="StockRepeater"
-                    ItemTemplate="{StaticResource TileTemplate}"
-                    Layout="{StaticResource TileLayout}" />
-            </StackPanel>
-        </ScrollViewer>
+                </Button>
+            </GridView.Footer>
+        </GridView>
 
         <!--  Footer: volume and stop  -->
         <Grid Grid.Row="3" ColumnSpacing="8">

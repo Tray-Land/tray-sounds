@@ -71,6 +71,37 @@
                 <TextBlock
                     Margin="0,16,0,4"
                     Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="Board" />
+                <Grid Style="{StaticResource CardStyle}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="140" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Grid size" />
+                        <TextBlock
+                            x:Name="GridSizeDescription"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Style="{StaticResource CaptionTextBlockStyle}"
+                            TextWrapping="Wrap" />
+                    </StackPanel>
+                    <Slider
+                        x:Name="GridSizeSlider"
+                        Grid.Column="1"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Tiles per row"
+                        Maximum="5"
+                        Minimum="2"
+                        SnapsTo="StepValues"
+                        StepFrequency="1"
+                        TickFrequency="1"
+                        TickPlacement="BottomRight"
+                        ValueChanged="GridSizeSlider_ValueChanged" />
+                </Grid>
+
+                <TextBlock
+                    Margin="0,16,0,4"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
                     Text="General" />
                 <Grid Style="{StaticResource CardStyle}">
                     <Grid.ColumnDefinitions>

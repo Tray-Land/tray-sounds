@@ -38,6 +38,20 @@ internal static class SettingsService
         set => Set(nameof(OneSoundAtATime), value);
     }
 
+    /// <summary>How many tiles fit across the board.</summary>
+    public static int GridColumns
+    {
+        get => SoundOrderPolicy.ClampColumns(Get(nameof(GridColumns), SoundOrderPolicy.DefaultColumns));
+        set => Set(nameof(GridColumns), SoundOrderPolicy.ClampColumns(value));
+    }
+
+    /// <summary>Sound ids in the order the user arranged them.</summary>
+    public static List<string> SoundOrder
+    {
+        get => SoundOrderPolicy.Parse(Get<string?>(nameof(SoundOrder), null));
+        set => Set(nameof(SoundOrder), SoundOrderPolicy.Serialize(value));
+    }
+
     public static T? GetJson<T>(string key, JsonTypeInfo<T> typeInfo)
     {
         if (Get<string?>(key, null) is not { } json)
