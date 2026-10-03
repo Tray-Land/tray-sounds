@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "TraySounds (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "TraySounds (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
