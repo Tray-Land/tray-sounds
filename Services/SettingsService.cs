@@ -24,6 +24,20 @@ internal static class SettingsService
         set => Set(nameof(HasLaunchedBefore), value);
     }
 
+    /// <summary>Playback volume, 0 to 1.</summary>
+    public static double Volume
+    {
+        get => Math.Clamp(Get(nameof(Volume), 0.8), 0, 1);
+        set => Set(nameof(Volume), Math.Clamp(value, 0, 1));
+    }
+
+    /// <summary>When on, starting a sound stops whatever else is playing.</summary>
+    public static bool OneSoundAtATime
+    {
+        get => Get(nameof(OneSoundAtATime), true);
+        set => Set(nameof(OneSoundAtATime), value);
+    }
+
     public static T? GetJson<T>(string key, JsonTypeInfo<T> typeInfo)
     {
         if (Get<string?>(key, null) is not { } json)

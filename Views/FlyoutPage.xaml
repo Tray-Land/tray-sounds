@@ -3,9 +3,61 @@
     x:Class="TraySounds.Views.FlyoutPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:views="using:TraySounds.Views"
     Background="Transparent">
 
-    <Grid Padding="16,12,12,16" RowSpacing="12">
+    <Page.Resources>
+        <UniformGridLayout
+            x:Key="TileLayout"
+            ItemsStretch="Fill"
+            MinColumnSpacing="6"
+            MinItemHeight="84"
+            MinItemWidth="104"
+            MinRowSpacing="6" />
+
+        <DataTemplate x:Key="TileTemplate" x:DataType="views:SoundTile">
+            <Button
+                Padding="4,8,4,0"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Stretch"
+                HorizontalContentAlignment="Stretch"
+                VerticalContentAlignment="Stretch"
+                AutomationProperties.Name="{x:Bind AccessibleName, Mode=OneWay}"
+                Click="Tile_Click"
+                ContextRequested="Tile_ContextRequested"
+                Tag="{x:Bind}"
+                ToolTipService.ToolTip="{x:Bind Name, Mode=OneWay}">
+                <Grid RowSpacing="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="6" />
+                    </Grid.RowDefinitions>
+                    <TextBlock
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        FontFamily="Segoe UI Emoji"
+                        FontSize="26"
+                        Text="{x:Bind Emoji}" />
+                    <TextBlock
+                        Grid.Row="1"
+                        HorizontalAlignment="Center"
+                        MaxLines="1"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        Text="{x:Bind Name, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis" />
+                    <ProgressBar
+                        Grid.Row="2"
+                        Margin="12,0"
+                        VerticalAlignment="Center"
+                        IsIndeterminate="True"
+                        Visibility="{x:Bind IsPlaying, Mode=OneWay}" />
+                </Grid>
+            </Button>
+        </DataTemplate>
+    </Page.Resources>
+
+    <Grid Padding="16,12,12,12" RowSpacing="8">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -26,13 +78,26 @@
                 Style="{StaticResource SubtitleTextBlockStyle}"
                 Text="Tray Sounds" />
             <Button
-                x:Name="RefreshButton"
+                x:Name="AddButton"
                 Grid.Column="1"
-                AutomationProperties.Name="Refresh"
-                Click="RefreshButton_Click"
+                AutomationProperties.Name="Add a sound"
                 Style="{StaticResource FlyoutIconButtonStyle}"
-                ToolTipService.ToolTip="Refresh">
-                <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                ToolTipService.ToolTip="Add a sound">
+                <FontIcon FontSize="14" Glyph="&#xE710;" />
+                <Button.Flyout>
+                    <MenuFlyout Placement="BottomEdgeAlignedRight">
+                        <MenuFlyoutItem Click="Record_Click" Text="Record from microphone">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE720;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                        <MenuFlyoutItem Click="ChooseFile_Click" Text="Choose a sound file">
+                            <MenuFlyoutItem.Icon>
+                                <FontIcon Glyph="&#xE8E5;" />
+                            </MenuFlyoutItem.Icon>
+                        </MenuFlyoutItem>
+                    </MenuFlyout>
+                </Button.Flyout>
             </Button>
             <Button
                 Grid.Column="2"
@@ -44,48 +109,99 @@
             </Button>
         </Grid>
 
-        <!--  Errors keep the last good content visible underneath  -->
         <InfoBar
             x:Name="StatusBar"
             Grid.Row="1"
-            IsClosable="False"
             IsOpen="False"
             Severity="Warning" />
 
-        <!--  Content: replace with the app's own view  -->
-        <Border
+        <ScrollViewer
+            x:Name="BoardScroller"
             Grid.Row="2"
-            Padding="16"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="8">
-            <StackPanel VerticalAlignment="Center" Spacing="4">
-                <TextBlock
-                    x:Name="ValueText"
-                    HorizontalAlignment="Center"
-                    Style="{StaticResource TitleLargeTextBlockStyle}"
-                    Text="--" />
-                <TextBlock
-                    HorizontalAlignment="Center"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    Text="Replace this card with the app's content." />
-            </StackPanel>
-        </Border>
+            Margin="0,0,-8,0">
+            <StackPanel Margin="0,0,8,4" Spacing="8">
+                <TextBlock Style="{StaticResource BodyStrongTextBlockStyle}" Text="Your sounds" />
 
-        <!--  Footer  -->
-        <Grid Grid.Row="3">
-            <TextBlock
-                x:Name="UpdatedText"
+                <!--  Empty state: one clear next step  -->
+                <Border
+                    x:Name="EmptyCard"
+                    Padding="16,12"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="1"
+                    CornerRadius="8">
+                    <StackPanel Spacing="10">
+                        <TextBlock
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Record a clip or add an audio file to put it on your board."
+                            TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button AutomationProperties.Name="Record a sound" Click="Record_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon FontSize="14" Glyph="&#xE720;" />
+                                    <TextBlock Text="Record" />
+                                </StackPanel>
+                            </Button>
+                            <Button AutomationProperties.Name="Choose a sound file" Click="ChooseFile_Click">
+                                <StackPanel Orientation="Horizontal" Spacing="8">
+                                    <FontIcon FontSize="14" Glyph="&#xE8E5;" />
+                                    <TextBlock Text="Choose file" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <ItemsRepeater
+                    x:Name="UserRepeater"
+                    ItemTemplate="{StaticResource TileTemplate}"
+                    Layout="{StaticResource TileLayout}" />
+
+                <TextBlock
+                    Margin="0,8,0,0"
+                    Style="{StaticResource BodyStrongTextBlockStyle}"
+                    Text="Stock sounds" />
+                <ItemsRepeater
+                    x:Name="StockRepeater"
+                    ItemTemplate="{StaticResource TileTemplate}"
+                    Layout="{StaticResource TileLayout}" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <!--  Footer: volume and stop  -->
+        <Grid Grid.Row="3" ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <FontIcon
+                x:Name="VolumeIcon"
+                Margin="4,0,0,0"
+                FontSize="16"
+                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                Glyph="&#xE767;" />
+            <Slider
+                x:Name="VolumeSlider"
+                Grid.Column="1"
                 VerticalAlignment="Center"
-                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                Style="{StaticResource CaptionTextBlockStyle}" />
-            <ProgressRing
-                x:Name="LoadingRing"
-                Width="16"
-                Height="16"
-                HorizontalAlignment="Right"
-                IsActive="False" />
+                AutomationProperties.Name="Volume"
+                Maximum="100"
+                Minimum="0"
+                StepFrequency="1"
+                ValueChanged="VolumeSlider_ValueChanged" />
+            <Button
+                x:Name="StopButton"
+                Grid.Column="2"
+                AutomationProperties.Name="Stop all sounds"
+                Click="StopButton_Click"
+                IsEnabled="False"
+                ToolTipService.ToolTip="Stop all sounds">
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <FontIcon FontSize="12" Glyph="&#xE71A;" />
+                    <TextBlock Text="Stop" />
+                </StackPanel>
+            </Button>
         </Grid>
     </Grid>
 </Page>

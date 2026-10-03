@@ -27,7 +27,7 @@ public partial class App : Application
     private RegisteredWaitHandle? _showWait;
     private TrayIcon? _trayIcon;
     private TrayFlyoutWindow? _flyout;
-    private SettingsWindow? _settings;
+    private AddSoundWindow? _addSound;
     private DispatcherQueue? _dispatcher;
     private bool _isExiting;
 
@@ -72,6 +72,8 @@ public partial class App : Application
         _showWait = ThreadPool.RegisterWaitForSingleObject(_showEvent,
             (_, _) => _dispatcher.TryEnqueue(ShowFlyout), null, Timeout.Infinite, executeOnlyOnce: false);
 
+        PlaybackService.Initialize(_dispatcher);
+        PlaybackService.Changed += OnPlaybackChanged;
         InitializeTrayIcon();
 
         // First run: show where the app lives instead of launching into silence.
@@ -102,24 +104,47 @@ public partial class App : Application
     {
         TrayFlyoutWindow flyout = EnsureFlyout();
         flyout.HidePopup();
+        flyout.ShowMainPage();
         flyout.ShowPopup();
     }
 
+    /// <summary>Shows the flyout on its settings page.</summary>
     public void ShowSettings()
     {
-        _flyout?.HidePopup();
-        if (_settings is null)
+        TrayFlyoutWindow flyout = EnsureFlyout();
+        flyout.ShowSettingsPage();
+        if (!flyout.IsPopupVisible)
         {
-            _settings = new SettingsWindow();
-            _settings.Closed += (_, _) =>
+            flyout.ShowPopup();
+        }
+    }
+
+    public void ShowAddSound(AddSoundStart start = AddSoundStart.None)
+    {
+        _flyout?.HidePopup();
+        if (_addSound is null)
+        {
+            _addSound = new AddSoundWindow();
+            _addSound.Closed += (_, _) =>
             {
-                _settings = null;
+                _addSound = null;
                 ReleaseIdleResourcesIfNoWindows();
             };
         }
 
-        _settings.Activate();
-        _settings.BringToFront();
+        _addSound.Start(start);
+    }
+
+    private void OnPlaybackChanged(object? sender, EventArgs e)
+    {
+        string[] playing = PlaybackService.PlayingNames().ToArray();
+        SetTrayStatus(playing.Length == 0 ? null : $"Playing {string.Join(", ", playing)}");
+
+        // Players are disposed when they finish; return their memory if nothing else is open.
+        if (playing.Length == 0)
+        {
+            ReleaseIdleResourcesIfNoWindows();
+        }
     }
 
     private void InitializeTrayIcon()
@@ -139,18 +164,57 @@ public partial class App : Application
     private void TrayIcon_ContextMenu(TrayIcon sender, TrayIconEventArgs args)
     {
         MenuFlyout menu = new();
-        MenuFlyoutItem open = new() { Text = $"Open {DisplayName}", Icon = new FontIcon { Glyph = "" } };
+        MenuFlyoutItem open = new() { Text = $"Open {DisplayName}", Icon = new FontIcon { Glyph = "\uE8A7" } };
         open.Click += (_, _) => ShowFlyout();
-        MenuFlyoutItem settings = new() { Text = "Settings", Icon = new FontIcon { Glyph = "" } };
+        menu.Items.Add(open);
+
+        // Quick play without opening the board: the user's sounds first, then the stock ones.
+        MenuFlyoutSubItem play = new() { Text = "Play", Icon = new FontIcon { Glyph = "\uE768" } };
+        IReadOnlyList<Sound> userSounds = SoundLibrary.UserSounds();
+        foreach (Sound sound in userSounds)
+        {
+            play.Items.Add(PlayItem(sound));
+        }
+
+        if (userSounds.Count > 0)
+        {
+            play.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        foreach (Sound sound in SoundLibrary.Stock())
+        {
+            play.Items.Add(PlayItem(sound));
+        }
+
+        menu.Items.Add(play);
+
+        if (PlaybackService.IsAnyPlaying)
+        {
+            MenuFlyoutItem stop = new() { Text = "Stop all sounds", Icon = new FontIcon { Glyph = "\uE71A" } };
+            stop.Click += (_, _) => PlaybackService.StopAll();
+            menu.Items.Add(stop);
+        }
+
+        MenuFlyoutItem add = new() { Text = "Add a sound…", Icon = new FontIcon { Glyph = "\uE710" } };
+        add.Click += (_, _) => ShowAddSound();
+        menu.Items.Add(add);
+
+        MenuFlyoutItem settings = new() { Text = "Settings", Icon = new FontIcon { Glyph = "\uE713" } };
         settings.Click += (_, _) => ShowSettings();
-        MenuFlyoutItem exit = new() { Text = "Exit", Icon = new FontIcon { Glyph = "" } };
+        MenuFlyoutItem exit = new() { Text = "Exit", Icon = new FontIcon { Glyph = "\uE7E8" } };
         exit.Click += (_, _) => ExitApp();
 
-        menu.Items.Add(open);
         menu.Items.Add(settings);
         menu.Items.Add(new MenuFlyoutSeparator());
         menu.Items.Add(exit);
         args.Flyout = menu;
+
+        static MenuFlyoutItem PlayItem(Sound sound)
+        {
+            MenuFlyoutItem item = new() { Text = $"{sound.Emoji}  {sound.Name}" };
+            item.Click += (_, _) => _ = PlaybackService.PlayAsync(sound);
+            return item;
+        }
     }
 
     private TrayFlyoutWindow EnsureFlyout()
@@ -171,7 +235,7 @@ public partial class App : Application
 
     private void ReleaseIdleResourcesIfNoWindows()
     {
-        if (_flyout is null && _settings is null && !_isExiting)
+        if (_flyout is null && _addSound is null && !PlaybackService.IsAnyPlaying && !_isExiting)
         {
             MemoryService.ReleaseIdle();
         }
@@ -180,8 +244,9 @@ public partial class App : Application
     private void ExitApp()
     {
         _isExiting = true;
+        PlaybackService.StopAll();
         _flyout?.CloseWindow();
-        _settings?.Close();
+        _addSound?.Close();
 
         if (_trayIcon is not null)
         {
