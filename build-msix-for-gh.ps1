@@ -25,6 +25,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 
 # A packaged app project is a .csproj with a Package.appxmanifest next to it
 # (test and library projects have none). Returns the matching .csproj files under $Root.
@@ -136,6 +138,271 @@ function Get-ReleaseTag {
     return 'v' + ($parts -join '.')
 }
 
+function Get-GitHubRepository {
+    $url = & git -C $repoRoot remote get-url origin 2>$null
+    if ($LASTEXITCODE -ne 0 -or "$url" -notmatch 'github\.com[:/](?<repo>[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(\.git)?/?$') {
+        throw "Could not work out the GitHub owner/repository from the 'origin' remote ($url)."
+    }
+    return $Matches['repo']
+}
+
+function Read-ZipEntryText {
+    param(
+        [Parameter(Mandatory)]
+        [System.IO.Compression.ZipArchive]$Archive,
+
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    $entry = $Archive.GetEntry($Name)
+    if (-not $entry) {
+        throw "Missing package entry: $Name."
+    }
+    $reader = [System.IO.StreamReader]::new($entry.Open())
+    try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+}
+
+# A framework-dependent app needs the Windows App Runtime packages in its feed.
+function Get-FrameworkPackages {
+    $reference = Select-Xml -Path $projectPath -XPath "//PackageReference[@Include='Microsoft.WindowsAppSDK.Runtime']" |
+        Select-Object -First 1
+    if (-not $reference) {
+        return
+    }
+    $runtimeVersion = $reference.Node.Version
+    if (-not $runtimeVersion -or $runtimeVersion -match '[*\[\(]') {
+        throw "Pin Microsoft.WindowsAppSDK.Runtime to an exact version in $projectPath (found '$runtimeVersion') so the feed can name the matching framework package."
+    }
+
+    $nugetRoot = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $HOME '.nuget\packages' }
+    $runtimeRoot = Join-Path $nugetRoot "microsoft.windowsappsdk.runtime\$runtimeVersion"
+    if (-not (Test-Path -LiteralPath $runtimeRoot)) {
+        & dotnet restore $projectPath | Out-Null
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $runtimeRoot)) {
+            throw "Microsoft.WindowsAppSDK.Runtime $runtimeVersion is not in the NuGet cache ($runtimeRoot)."
+        }
+    }
+
+    foreach ($build in $builds) {
+        $source = Get-ChildItem -LiteralPath (Join-Path $runtimeRoot "tools\MSIX\win10-$($build.Name)") -Filter 'Microsoft.WindowsAppRuntime.*.msix' -File |
+            Where-Object { $_.Name -match '^Microsoft\.WindowsAppRuntime\.\d+\.msix$' } |
+            Select-Object -First 1
+        if (-not $source) {
+            throw "Framework package for $($build.Name) not found under $runtimeRoot."
+        }
+
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($source.FullName)
+        try {
+            [xml]$frameworkManifest = Read-ZipEntryText -Archive $zip -Name 'AppxManifest.xml'
+        }
+        finally {
+            $zip.Dispose()
+        }
+        $identity = $frameworkManifest.Package.Identity
+        [pscustomobject]@{
+            Name = $identity.Name
+            Publisher = $identity.Publisher
+            Version = $identity.Version
+            Architecture = $identity.ProcessorArchitecture
+            Source = $source.FullName
+            AssetName = "$($identity.Name)_$($identity.Version)_$($identity.ProcessorArchitecture).msix"
+        }
+    }
+}
+
+# The stable feed URL always points to the latest release; its assets are version-pinned.
+function New-AppInstallerFile {
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Repository,
+        [Parameter(Mandatory)] [string]$BundleName,
+        [object[]]$FrameworkPackages = @()
+    )
+
+    $namespace = 'http://schemas.microsoft.com/appx/appinstaller/2021'
+    $baseUri = "https://github.com/$Repository/releases"
+    $assetBase = "$baseUri/download/$([uri]::EscapeDataString($tag))"
+
+    $document = New-Object System.Xml.XmlDocument
+    [void]$document.AppendChild($document.CreateXmlDeclaration('1.0', 'utf-8', $null))
+    $installer = $document.CreateElement('AppInstaller', $namespace)
+    $installer.SetAttribute('Version', $version)
+    $installer.SetAttribute('Uri', "$baseUri/latest/download/$feedName")
+    [void]$document.AppendChild($installer)
+
+    $bundle = $document.CreateElement('MainBundle', $namespace)
+    $bundle.SetAttribute('Name', $identityName)
+    $bundle.SetAttribute('Publisher', $identityPublisher)
+    $bundle.SetAttribute('Version', $version)
+    $bundle.SetAttribute('Uri', "$assetBase/$([uri]::EscapeDataString($BundleName))")
+    [void]$installer.AppendChild($bundle)
+
+    if ($FrameworkPackages.Count -gt 0) {
+        $dependencies = $document.CreateElement('Dependencies', $namespace)
+        foreach ($framework in $FrameworkPackages) {
+            $package = $document.CreateElement('Package', $namespace)
+            $package.SetAttribute('Name', $framework.Name)
+            $package.SetAttribute('Publisher', $framework.Publisher)
+            $package.SetAttribute('Version', $framework.Version)
+            $package.SetAttribute('ProcessorArchitecture', $framework.Architecture)
+            $package.SetAttribute('Uri', "$assetBase/$([uri]::EscapeDataString($framework.AssetName))")
+            [void]$dependencies.AppendChild($package)
+        }
+        [void]$installer.AppendChild($dependencies)
+    }
+
+    # Check on launch without blocking, and in the background roughly every eight hours.
+    $settings = $document.CreateElement('UpdateSettings', $namespace)
+    $onLaunch = $document.CreateElement('OnLaunch', $namespace)
+    $onLaunch.SetAttribute('HoursBetweenUpdateChecks', '0')
+    $onLaunch.SetAttribute('ShowPrompt', 'false')
+    $onLaunch.SetAttribute('UpdateBlocksActivation', 'false')
+    [void]$settings.AppendChild($onLaunch)
+    [void]$settings.AppendChild($document.CreateElement('AutomaticBackgroundTask', $namespace))
+    [void]$installer.AppendChild($settings)
+
+    $document.Save($Path)
+}
+
+# Bundle installs also enroll in updates through the embedded feed. Restore the source
+# manifest after publishing so development and Store packages do not use the GitHub feed.
+function Add-AutoUpdateReference {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+
+    $namespace = 'http://schemas.microsoft.com/appx/manifest/uap/windows10/13'
+    $document = New-Object System.Xml.XmlDocument
+    $document.PreserveWhitespace = $true
+    $document.Load($Path)
+    $root = $document.DocumentElement
+    $properties = $root.Properties
+    if ($properties.GetElementsByTagName('AutoUpdate', $namespace).Count -gt 0) {
+        return
+    }
+
+    $root.SetAttribute('xmlns:uap13', $namespace)
+    $root.SetAttribute('IgnorableNamespaces', "$($root.GetAttribute('IgnorableNamespaces')) uap13".Trim())
+    $autoUpdate = $document.CreateElement('uap13', 'AutoUpdate', $namespace)
+    $appInstaller = $document.CreateElement('uap13', 'AppInstaller', $namespace)
+    $appInstaller.SetAttribute('File', 'Update.appinstaller')
+    [void]$autoUpdate.AppendChild($appInstaller)
+    [void]$properties.AppendChild($autoUpdate)
+    $document.Save($Path)
+}
+
+function Find-MakeAppx {
+    $found = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue |
+        Sort-Object { [version]($_.Directory.Parent.Name) } -Descending |
+        Select-Object -First 1
+    if (-not $found) {
+        throw 'MakeAppx (Windows SDK) was not found.'
+    }
+    return $found.FullName
+}
+
+# Verify the actual artifacts before uploading, including their embedded update configuration.
+function Test-ReleaseBundle {
+    param(
+        [Parameter(Mandatory)] [string]$BundlePath,
+        [Parameter(Mandatory)] [string]$FeedPath,
+        [object[]]$FrameworkPackages = @()
+    )
+
+    [xml]$feed = Get-Content -LiteralPath $FeedPath -Raw
+    $main = $feed.AppInstaller.MainBundle
+    if (-not $main -or $feed.AppInstaller.MainPackage) {
+        throw 'The feed must describe a MainBundle.'
+    }
+    if ($main.Version -cne $feed.AppInstaller.Version) {
+        throw 'The feed and bundle versions must match.'
+    }
+    if ([uri]::UnescapeDataString(([uri]$main.Uri).Segments[-1]) -cne [System.IO.Path]::GetFileName($BundlePath)) {
+        throw 'The feed URI must name the published bundle.'
+    }
+    $feedText = [System.IO.File]::ReadAllText($FeedPath)
+
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($BundlePath)
+    try {
+        [xml]$bundleManifest = Read-ZipEntryText -Archive $zip -Name 'AppxMetadata/AppxBundleManifest.xml'
+        foreach ($attribute in 'Name', 'Publisher', 'Version') {
+            if ($bundleManifest.Bundle.Identity.GetAttribute($attribute) -cne $main.GetAttribute($attribute)) {
+                throw "Bundle identity does not match the feed ($attribute)."
+            }
+        }
+
+        $architectures = @()
+        $applicationPackages = @($bundleManifest.Bundle.Packages.Package | Where-Object Type -eq 'application')
+        foreach ($entry in $applicationPackages) {
+            $architecture = $entry.Architecture
+            if ($architecture -notin 'x64', 'arm64' -or $architecture -in $architectures) {
+                throw "Unexpected or duplicate application architecture: $architecture."
+            }
+            $architectures += $architecture
+
+            $inner = $zip.GetEntry($entry.FileName)
+            if (-not $inner) {
+                throw "Missing bundled package: $($entry.FileName)."
+            }
+            $stream = New-Object System.IO.MemoryStream
+            try {
+                $source = $inner.Open()
+                try { $source.CopyTo($stream) } finally { $source.Dispose() }
+                $stream.Position = 0
+                $package = New-Object System.IO.Compression.ZipArchive($stream, [System.IO.Compression.ZipArchiveMode]::Read, $true)
+                try {
+                    [xml]$manifest = Read-ZipEntryText -Archive $package -Name 'AppxManifest.xml'
+                    foreach ($attribute in 'Name', 'Publisher', 'Version') {
+                        if ($manifest.Package.Identity.GetAttribute($attribute) -cne $main.GetAttribute($attribute)) {
+                            throw "$architecture package identity does not match the feed ($attribute)."
+                        }
+                    }
+                    if ($manifest.Package.Identity.ProcessorArchitecture -cne $architecture) {
+                        throw "$architecture package declares architecture $($manifest.Package.Identity.ProcessorArchitecture)."
+                    }
+                    if ((Read-ZipEntryText -Archive $package -Name 'Update.appinstaller') -cne $feedText) {
+                        throw "The Update.appinstaller embedded in the $architecture package differs from the published feed."
+                    }
+                    $namespaces = New-Object System.Xml.XmlNamespaceManager($manifest.NameTable)
+                    $namespaces.AddNamespace('p', 'http://schemas.microsoft.com/appx/manifest/foundation/windows10')
+                    $namespaces.AddNamespace('uap13', 'http://schemas.microsoft.com/appx/manifest/uap/windows10/13')
+                    $reference = $manifest.SelectSingleNode('/p:Package/p:Properties/uap13:AutoUpdate/uap13:AppInstaller', $namespaces)
+                    if (-not $reference -or $reference.GetAttribute('File') -cne 'Update.appinstaller') {
+                        throw "The $architecture manifest must reference the embedded Update.appinstaller."
+                    }
+                    if (-not $package.GetEntry('AppxBlockMap.xml')) {
+                        throw "The $architecture package has no block map, so updates could not be differential."
+                    }
+                }
+                finally { $package.Dispose() }
+            }
+            finally { $stream.Dispose() }
+        }
+        foreach ($required in 'x64', 'arm64') {
+            if ($required -notin $architectures) {
+                throw "The bundle is missing the $required application package."
+            }
+        }
+    }
+    finally {
+        $zip.Dispose()
+    }
+
+    $dependencyNodes = @($feed.AppInstaller.Dependencies.Package)
+    foreach ($framework in $FrameworkPackages) {
+        $node = $dependencyNodes | Where-Object { $_.Name -ceq $framework.Name -and $_.ProcessorArchitecture -ceq $framework.Architecture }
+        if (-not $node -or $node.Version -cne $framework.Version -or $node.Publisher -cne $framework.Publisher) {
+            throw "The feed does not list $($framework.Name) $($framework.Version) for $($framework.Architecture)."
+        }
+        if ([uri]::UnescapeDataString(([uri]$node.Uri).Segments[-1]) -cne $framework.AssetName) {
+            throw "The feed URI for $($framework.Name) $($framework.Architecture) does not match its release asset."
+        }
+    }
+    Write-Host "  Verified bundle ($($architectures -join ', ')), embedded feed, block maps and dependencies."
+}
+
 function Assert-ReleaseReady {
     param(
         [Parameter(Mandatory)]
@@ -236,6 +503,7 @@ function Invoke-GitHubMsixBuild {
         '-p:AppxPackageSigningEnabled=false'
         '-p:PackageCertificateThumbprint='
         "-p:AppxPackageDir=$appxPackageDir"
+        "-p:ReleaseAppInstallerPath=$script:embeddedFeedPath"
     )
 
     Write-Host "Building GitHub MSIX for $($Build.Name)..."
@@ -276,7 +544,7 @@ try {
         }
     }
 
-    # The publish profiles are git-ignored (*.pubxml), so a fresh clone won't have them.
+    # Both architecture profiles must be present before starting the build.
     foreach ($build in $builds) {
         $profilePath = Join-Path $publishProfilesRoot $build.PublishProfile
         if (-not (Test-Path -LiteralPath $profilePath)) {
@@ -296,6 +564,12 @@ try {
     $version = $versionMatch.Groups[1].Value
     $tag = Get-ReleaseTag -Version $version
     $versionedOutputDir = Join-Path $outputRoot "$version-gh"
+    $identity = ([xml]$manifestContent).Package.Identity
+    $identityName = $identity.Name
+    $identityPublisher = $identity.Publisher
+    $feedName = "$appName.appinstaller"
+    $bundleName = "${appName}_$($tag.Substring(1)).msixbundle"
+    $repository = Get-GitHubRepository
 
     Write-Host "Project: $appName ($projectPath), version $version"
 
@@ -305,18 +579,39 @@ try {
         Write-Host "Releasing $tag from branch '$branch'."
     }
 
-    foreach ($build in $builds) {
-        Invoke-GitHubMsixBuild -Build $build
-    }
-
-    Write-Host 'Collecting MSIX packages...'
     if (Test-Path -LiteralPath $versionedOutputDir) {
-        Get-ChildItem -LiteralPath $versionedOutputDir -Filter '*.msix' -File -ErrorAction SilentlyContinue |
+        Get-ChildItem -LiteralPath $versionedOutputDir -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Extension -in '.msix', '.msixbundle', '.appinstaller' } |
             Remove-Item -Force
     }
     else {
         New-Item -ItemType Directory -Path $versionedOutputDir -Force | Out-Null
     }
+
+    # Write the feed first so both packages embed the exact file published with the bundle.
+    $frameworkPackages = @(Get-FrameworkPackages)
+    $feedPath = Join-Path $versionedOutputDir $feedName
+    $script:embeddedFeedPath = $feedPath
+    New-AppInstallerFile -Path $feedPath -Repository $repository -BundleName $bundleName -FrameworkPackages $frameworkPackages
+    Write-Host "Created App Installer feed $feedName for $repository ($(@($frameworkPackages).Count) framework package(s) listed)."
+
+    $originalManifest = [System.IO.File]::ReadAllBytes($manifestPath)
+    try {
+        Add-AutoUpdateReference -Path $manifestPath
+        foreach ($build in $builds) {
+            Invoke-GitHubMsixBuild -Build $build
+        }
+    }
+    finally {
+        [System.IO.File]::WriteAllBytes($manifestPath, $originalManifest)
+    }
+
+    Write-Host 'Collecting MSIX packages...'
+    $stagingDir = Join-Path $outputRoot 'bundle-staging'
+    if (Test-Path -LiteralPath $stagingDir) {
+        Remove-Item -LiteralPath $stagingDir -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $stagingDir -Force | Out-Null
     foreach ($build in $builds) {
         # Exclude Dependencies\* (e.g. Microsoft.WindowsAppRuntime.2.msix) - only collect the app's own package.
         $msixFiles = @(Get-ChildItem -LiteralPath $build.OutputDir -Recurse -Filter '*.msix' -File |
@@ -328,15 +623,28 @@ try {
             throw "Expected one app package under $($build.OutputDir) for $($build.Name), found: $(($msixFiles | ForEach-Object Name) -join ', ')."
         }
         foreach ($msix in $msixFiles) {
-            $destination = Join-Path $versionedOutputDir $msix.Name
-            Copy-Item -LiteralPath $msix.FullName -Destination $destination -Force
-            Write-Host "  Copied $($msix.Name) to $versionedOutputDir"
+            Copy-Item -LiteralPath $msix.FullName -Destination (Join-Path $stagingDir $msix.Name) -Force
+            Write-Host "  Staged $($msix.Name)"
         }
     }
 
-    $packages = @(Get-ChildItem -LiteralPath $versionedOutputDir -Filter '*.msix' -File)
-    Invoke-MsixSigning -Files $packages
-    Write-Host "Signed MSIX packages are under $versionedOutputDir"
+    $bundlePath = Join-Path $versionedOutputDir $bundleName
+    & (Find-MakeAppx) bundle /d $stagingDir /p $bundlePath /bv $version /o | Out-Host
+    if ($LASTEXITCODE -ne 0) {
+        throw 'makeappx bundle failed.'
+    }
+
+    # Sign only the bundle; Microsoft's framework packages retain their own signatures.
+    Invoke-MsixSigning -Files @(Get-Item -LiteralPath $bundlePath)
+
+    $assets = @(Get-Item -LiteralPath $bundlePath, $feedPath)
+    foreach ($framework in $frameworkPackages) {
+        $assets += Copy-Item -LiteralPath $framework.Source -Destination (Join-Path $versionedOutputDir $framework.AssetName) -Force -PassThru
+    }
+
+    Write-Host 'Verifying the release...'
+    Test-ReleaseBundle -BundlePath $bundlePath -FeedPath $feedPath -FrameworkPackages $frameworkPackages
+    Write-Host "Release files are under $versionedOutputDir"
 
     if (-not $SkipRelease) {
         $commit = (& git -C $repoRoot rev-parse HEAD).Trim()
@@ -349,7 +657,7 @@ try {
         }
 
         # Always a draft: review and publish it manually on GitHub.
-        $ghArguments = @('release', 'create', $tag) + $packages.FullName + @('--title', $tag, '--target', $commit, '--draft')
+        $ghArguments = @('release', 'create', $tag) + $assets.FullName + @('--title', $tag, '--target', $commit, '--draft')
         $notesFile = $null
         if ($Notes) {
             # Pass notes via a file so quotes/newlines survive Windows PowerShell 5.1 native arg passing.

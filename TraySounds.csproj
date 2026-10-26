@@ -30,6 +30,11 @@
     <Content Include="Assets\AppIcon-dark.ico" />
     <Content Include="Assets\Sounds\*.wav;Assets\Sounds\*.mp3;Assets\Sounds\sound attribution.csv" />
     <Content Remove="branding\**" />
+    <!-- Only GitHub release builds embed their update feed. -->
+    <Content Include="$(ReleaseAppInstallerPath)" Condition="'$(ReleaseAppInstallerPath)' != ''">
+      <Link>Update.appinstaller</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <!-- Helper scripts are C# file-based apps and the tests are their own project. -->
     <Compile Remove="scripts\**;TraySounds.Tests\**" />
     <None Remove="scripts\**;TraySounds.Tests\**" />
