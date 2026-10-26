@@ -25,11 +25,13 @@ Tray Sounds is a WinUI 3 app with no main window. The tray icon opens a small, a
 
 Requires Windows 10 1809 (build 17763) or later, x64 or ARM64.
 
-Releases are published as signed MSIX packages on the GitHub releases page. If you sideload a release, install its signing certificate first (see the release notes).
+On Windows 11 (build 22000) or later with App Installer installed, download and open [TraySounds.appinstaller](https://github.com/Tray-Land/tray-sounds/releases/latest/download/TraySounds.appinstaller). This single URL always installs the latest stable release, choosing x64 or ARM64 automatically. Windows App Installer checks for updates on launch and in the background, without an in-app updater.
+
+The [release page](https://github.com/Tray-Land/tray-sounds/releases/latest) also has a signed `.msixbundle` containing both architectures and separate Windows App Runtime dependency packages. The bundle embeds the same update feed, so installing it directly also enables updates on Windows 11; use the `.appinstaller` to have Windows install missing dependencies automatically. On Windows 10, install the matching runtime dependency and bundle manually; the embedded update reference requires Windows 11. If Windows doesn't trust the publisher, install the signing certificate first (see the release notes).
 
 ## Privacy and footprint
 
-- **No network access.** The package doesn't declare the `internetClient` capability.
+- **No in-app network access.** The package doesn't declare the `internetClient` capability. Windows App Installer contacts GitHub separately to download releases and check for updates.
 - **Microphone:** used only while the Add a sound window is recording. Windows asks for permission the first time. If access is off, the window links to Settings > Privacy & security > Microphone.
 - **Storage:** your sounds are copied to the package's `LocalState\Sounds` folder, and their names are kept in `LocalState\library.json`. Recordings in progress go to `TempState` and are deleted if you cancel. Settings (volume, playback mode) live in `LocalSettings`. Uninstalling the app removes all of it.
 - **Idle cost:** with nothing open and nothing playing, the app is just the tray icon. Each sound gets its own media player, which is disposed when the sound ends. The flyout closes for real after a minute hidden, and its memory is returned.
@@ -42,6 +44,7 @@ Prerequisites: the [.NET 10 SDK](https://dotnet.microsoft.com/download), the win
 winapp run            # build, register with package identity, and launch
 winapp run --clean    # same, starting from a clean LocalState (first-run behavior)
 dotnet test TraySounds.Tests
+Invoke-Pester .\scripts\ReleasePackaging.Tests.ps1
 ```
 
 The first launch opens the flyout. After that the app runs from the tray. Look in the taskbar overflow (^) if the icon is hidden.
@@ -52,7 +55,22 @@ To regenerate the stock sounds after editing the synthesizer:
 dotnet run --file scripts\GenerateStockSounds.cs
 ```
 
-To build signed x64 and ARM64 MSIX packages and a draft GitHub release, run `build-msix-for-gh.ps1`.
+### GitHub releases
+
+Run `.\build-msix-for-gh.ps1` from a PowerShell session with the maintainer's `sign-msix` function loaded. Packaging also requires the Windows SDK (`makeappx.exe`); creating a release requires Git and an authenticated GitHub CLI (`gh auth login`).
+
+```powershell
+.\build-msix-for-gh.ps1 -SkipRelease  # build, sign, and verify locally; no tag or upload
+.\build-msix-for-gh.ps1               # build and create a draft GitHub release
+```
+
+Bump `Identity/@Version` in `Package.appxmanifest` before each release (for example, `1.2.0.0` becomes tag `v1.2.0`). Commit and push the changes first. The script uses the checked-in x64 and ARM64 publish profiles and writes these assets to `AppPackages\GitHub\<version>-gh\`:
+
+- `TraySounds_<version>.msixbundle`: a signed bundle containing both architectures, with an embedded `Update.appinstaller` and block maps for differential updates.
+- `TraySounds.appinstaller`: the stable-name feed, pointing to that release's bundle and dependencies.
+- The Microsoft-signed Windows App Runtime framework MSIX for each architecture.
+
+The script verifies identities, architectures, embedded feeds, block maps, dependencies, and the bundle signature before creating the draft. Review and publish the draft on GitHub to make the stable install URL serve it. `-Prerelease` creates a prerelease draft; prereleases do not replace GitHub's latest stable release or its update feed. Development and Store builds do not embed the GitHub update feed.
 
 ## Project layout
 
