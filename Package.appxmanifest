@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" xmlns:systemai="http://schemas.microsoft.com/appx/manifest/systemai/windows10" IgnorableNamespaces="uap uap10 rescap systemai uap5" xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5">
-  <Identity Name="25D2A4BF-41D5-41D5-8743-F845FEC15E84" Publisher="CN=Joseph Finney, O=Joseph Finney, L=Milwaukee, S=Wisconsin, C=US, PostalCode=53212" Version="1.0.0.0" />
+  <Identity Name="25D2A4BF-41D5-41D5-8743-F845FEC15E84" Publisher="CN=Joseph Finney, O=Joseph Finney, L=Milwaukee, S=Wisconsin, C=US, PostalCode=53212" Version="1.0.1.0" />
   <Properties>
     <DisplayName>Tray Sounds</DisplayName>
     <PublisherDisplayName>JoeFinApps</PublisherDisplayName>
